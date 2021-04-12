@@ -15,7 +15,6 @@ class SingleStageSegDetector(BaseDetector):
                  backbone,
                  neck=None,
                  bbox_head=None,
-                 mask_feat_head=None,
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None):
@@ -23,19 +22,12 @@ class SingleStageSegDetector(BaseDetector):
         self.backbone = build_backbone(backbone)
         if neck is not None:
             self.neck = build_neck(neck)
-        if mask_feat_head is not None:
-            self.mask_feat_head = build_head(mask_feat_head)
         bbox_head.update(train_cfg=train_cfg)
         bbox_head.update(test_cfg=test_cfg)
         self.bbox_head = build_head(bbox_head)
         self.train_cfg = train_cfg
         self.test_cfg = test_cfg
         self.init_weights(pretrained=pretrained)
-
-    @property
-    def with_mask_feat_head(self):
-        return hasattr(self, 'mask_feat_head') and \
-            self.mask_feat_head is not None
 
     def init_weights(self, pretrained=None):
         """Initialize the weights in detector.
@@ -51,12 +43,6 @@ class SingleStageSegDetector(BaseDetector):
                     m.init_weights()
             else:
                 self.neck.init_weights()
-        if self.with_mask_feat_head:
-            if isinstance(self.mask_feat_head, nn.Sequential):
-                for m in self.mask_feat_head:
-                    m.init_weights()
-            else:
-                self.mask_feat_head.init_weights()
         self.bbox_head.init_weights()
 
     def extract_feat(self, img):
@@ -101,25 +87,9 @@ class SingleStageSegDetector(BaseDetector):
             dict[str, Tensor]: A dictionary of loss components.
         """
         x = self.extract_feat(img)
-        outs = self.bbox_head(x)
-
-        if self.with_mask_feat_head:
-            mask_feat_pred = self.mask_feat_head(
-                x[self.mask_feat_head.
-                  start_level:self.mask_feat_head.end_level + 1])
-            if gt_labels is None:
-                loss_inputs = outs + (mask_feat_pred, gt_bboxes, img_metas)
-            else:
-                loss_inputs = outs + (mask_feat_pred, gt_bboxes,
-                                      gt_labels, gt_masks, img_metas)
-        else:
-            if gt_labels is None:
-                loss_inputs = outs + (gt_bboxes, img_metas)
-            else:
-                loss_inputs = outs + \
-                    (gt_bboxes, gt_labels, gt_masks, img_metas)
-        losses = self.bbox_head.loss(
-            *loss_inputs, gt_bboxes_ignore=gt_bboxes_ignore)
+        losses = self.bbox_head.forward_train(x, img_metas,
+                                              gt_bboxes, gt_labels,
+                                              gt_bboxes_ignore, gt_masks)
         return losses
 
     def simple_test(self, img, img_meta, rescale=False):
@@ -128,16 +98,9 @@ class SingleStageSegDetector(BaseDetector):
         x = self.extract_feat(img)
         outs = self.bbox_head(x, eval=True)
 
-        if self.with_mask_feat_head:
-            mask_feat_pred = self.mask_feat_head(
-                x[self.mask_feat_head.
-                  start_level:self.mask_feat_head.end_level + 1])
-            seg_inputs = outs + (mask_feat_pred, img_meta,
-                                 self.test_cfg, rescale)
-        else:
-            seg_inputs = outs + (img_meta, self.test_cfg, rescale)
+        seg_inputs = outs + (img_meta, self.test_cfg, rescale)
         bbox_results, segm_results = self.bbox_head.get_seg(*seg_inputs)
-        return bbox_results[0], segm_results[0]
+        return list(zip(bbox_results, segm_results))
 
     def aug_test(self, imgs, img_metas, rescale=False):
         raise NotImplementedError

@@ -4,9 +4,10 @@ import mmcv
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from mmcv.cnn import normal_init, bias_init_with_prob, ConvModule
+from mmcv.cnn import ConvModule, bias_init_with_prob, normal_init
 from mmdet.core import multi_apply
 from mmdet.models.builder import HEADS, build_loss
+from .base_dense_seg_head import BaseDenseSegHead
 
 from ..utils import matrix_nms
 
@@ -33,7 +34,7 @@ def dice_loss(input, target):
 
 
 @HEADS.register_module()
-class SOLOHead(nn.Module):
+class SOLOHead(BaseDenseSegHead):
     """SOLO: Segmenting Objects by Locations
     https://arxiv.org/abs/1912.04488
     """
@@ -140,12 +141,12 @@ class SOLOHead(nn.Module):
         return ins_pred, cate_pred
 
     def split_feats(self, feats):
-        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear'),
+        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear', recompute_scale_factor=True),
                 feats[1],
                 feats[2],
                 feats[3],
                 F.interpolate(feats[4], size=feats[3].shape[-2:],
-                              mode='bilinear'))
+                              mode='bilinear', recompute_scale_factor=True))
 
     def forward_single(self, x, idx, eval=False, upsampled_size=None):
         ins_feat = x
@@ -165,7 +166,8 @@ class SOLOHead(nn.Module):
         for i, ins_layer in enumerate(self.ins_convs):
             ins_feat = ins_layer(ins_feat)
 
-        ins_feat = F.interpolate(ins_feat, scale_factor=2, mode='bilinear')
+        ins_feat = F.interpolate(
+            ins_feat, scale_factor=2, mode='bilinear', recompute_scale_factor=True)
         ins_pred = self.solo_ins_list[idx](ins_feat)
 
         # cate branch
@@ -173,13 +175,13 @@ class SOLOHead(nn.Module):
             if i == self.cate_down_pos:
                 seg_num_grid = self.seg_num_grids[idx]
                 cate_feat = F.interpolate(cate_feat, size=seg_num_grid,
-                                          mode='bilinear')
+                                          mode='bilinear', recompute_scale_factor=True)
             cate_feat = cate_layer(cate_feat)
 
         cate_pred = self.solo_cate(cate_feat)
         if eval:
             ins_pred = F.interpolate(ins_pred.sigmoid(), size=upsampled_size,
-                                     mode='bilinear')
+                                     mode='bilinear', recompute_scale_factor=True)
             cate_pred = points_nms(cate_pred.sigmoid(),
                                    kernel=2).permute(0, 2, 3, 1)
         return ins_pred, cate_pred
@@ -281,7 +283,7 @@ class SOLOHead(nn.Module):
                                         dtype=torch.bool, device=device)
 
             hit_indices = ((gt_areas >= lower_bound) &
-                           (gt_areas <= upper_bound)).nonzero().flatten()
+                           (gt_areas <= upper_bound)).nonzero(as_tuple=False).flatten()
             if len(hit_indices) == 0:
                 ins_label_list.append(ins_label)
                 cate_label_list.append(cate_label)
@@ -385,18 +387,46 @@ class SOLOHead(nn.Module):
             bbox_result = [np.zeros((0, 5), dtype=np.float32) for i in
                            range(self.num_classes)]
             segm_result = [[] for _ in range(self.num_classes)]
-            seg_pred = result[0].cpu().numpy()
-            cate_label = result[1].cpu().numpy()
-            cate_score = result[2].cpu().numpy()
+            seg_pred = result[0].detach().cpu().numpy()
+            cate_label = result[1].detach().cpu().numpy()
+            cate_score = result[2].detach().cpu().numpy()
             num_ins = seg_pred.shape[0]
-            # fake bboxes
+            # extract bboxes from segmentation result
             bboxes = np.zeros((num_ins, 5), dtype=np.float32)
             bboxes[:, -1] = cate_score
+            bboxes[:, :-1] = self.extract_bboxes(seg_pred)
+
             bbox_result = [bboxes[cate_label == i, :] for i in
                            range(self.num_classes)]
+
             for idx in range(num_ins):
                 segm_result[cate_label[idx]].append(seg_pred[idx])
         return bbox_result, segm_result
+
+    def extract_bboxes(self, mask):
+        """Compute bounding boxes from masks.
+        mask: [num_instances, height, width]. Mask pixels are either 1 or 0.
+        Returns: bbox array [num_instances, (x1, y1, x2, y2)].
+        """
+        num_ins = mask.shape[0]
+        boxes = np.zeros([num_ins, 4], dtype=np.float32)
+        for i in range(num_ins):
+            m = mask[i, :, :]
+            # Bounding box.
+            horizontal_indicies = np.where(np.any(m, axis=0))[0]
+            vertical_indicies = np.where(np.any(m, axis=1))[0]
+            if horizontal_indicies.shape[0]:
+                x1, x2 = horizontal_indicies[[0, -1]]
+                y1, y2 = vertical_indicies[[0, -1]]
+                # x2 and y2 should not be part of the box. Increment by 1.
+                x2 += 1
+                y2 += 1
+            else:
+                # No mask for this instance. Might happen due to
+                # resizing or cropping. Set bbox to zeros
+                x1, x2, y1, y2 = 0, 0, 0, 0
+            boxes[i] = np.array([x1, y1, x2, y2])
+        return boxes
 
     def get_seg_single(self,
                        cate_preds,
@@ -421,7 +451,7 @@ class SOLOHead(nn.Module):
         if len(cate_scores) == 0:
             return None
         # category labels.
-        inds = inds.nonzero()
+        inds = inds.nonzero(as_tuple=False)
         cate_labels = inds[:, 1]
 
         # strides.
@@ -488,9 +518,9 @@ class SOLOHead(nn.Module):
 
         seg_preds = F.interpolate(seg_preds.unsqueeze(0),
                                   size=upsampled_size_out,
-                                  mode='bilinear')[:, :, :h, :w]
+                                  mode='bilinear', recompute_scale_factor=True)[:, :, :h, :w]
         seg_masks = F.interpolate(seg_preds,
                                   size=ori_shape[:2],
-                                  mode='bilinear').squeeze(0)
+                                  mode='bilinear', recompute_scale_factor=True).squeeze(0)
         seg_masks = seg_masks > cfg.mask_thr
         return seg_masks, cate_labels, cate_scores

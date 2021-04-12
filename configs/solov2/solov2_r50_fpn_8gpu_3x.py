@@ -114,25 +114,27 @@ data = dict(
         img_prefix=data_root + 'val2017/',
         pipeline=test_pipeline))
 # optimizer
-# optimizer = dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0001)
-# optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
-# # learning policy
-# lr_config = dict(
-#     policy='step',
-#     warmup='linear',
-#     warmup_iters=500,
-#     warmup_ratio=0.01,
-#     step=[27, 33])
-evaluation = dict(metric=['bbox', 'segm'], proposal_nums=(1, 10, 100))
-optimizer = dict(type='SGD', lr=0.02, momentum=0.9, weight_decay=0.0001)
-optimizer_config = dict(grad_clip=None)
+optimizer = dict(type='SGD', lr=0.01, momentum=0.9, weight_decay=0.0001)
+optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+# learning policy
 lr_config = dict(
     policy='step',
     warmup='linear',
     warmup_iters=500,
-    warmup_ratio=0.001,
-    step=[16, 22])
+    warmup_ratio=0.01,
+    step=[27, 33])
 runner = dict(type='EpochBasedRunner', max_epochs=24)
+
+evaluation = dict(metric=['bbox', 'segm'], proposal_nums=(1, 10, 100))
+# optimizer = dict(type='SGD', lr=0.02, momentum=0.9, weight_decay=0.0001)
+# optimizer_config = dict(grad_clip=dict(max_norm=35, norm_type=2))
+# lr_config = dict(
+#     policy='step',
+#     warmup='linear',
+#     warmup_iters=500,
+#     warmup_ratio=0.001,
+#     step=[16, 22])
+# runner = dict(type='EpochBasedRunner', max_epochs=24)
 
 checkpoint_config = dict(interval=1)
 # yapf:disable
