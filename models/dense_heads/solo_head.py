@@ -1,4 +1,3 @@
-import numpy as np
 from scipy import ndimage
 import mmcv
 import torch
@@ -9,7 +8,7 @@ from mmdet.core import multi_apply
 from mmdet.models.builder import HEADS, build_loss
 from .base_dense_seg_head import BaseDenseSegHead
 
-from ..utils import matrix_nms
+from ..utils import matrix_nms, segm2result
 
 INF = 1e8
 
@@ -372,61 +371,10 @@ class SOLOHead(BaseDenseSegHead):
             result = self.get_seg_single(cate_pred_list, seg_pred_list,
                                          featmap_size, img_shape, ori_shape,
                                          scale_factor, cfg, rescale)
-            bbox_result, segm_result = self.segm2result(result)
+            bbox_result, segm_result = segm2result(result, self.num_classes)
             bbox_result_list.append(bbox_result)
             segm_result_list.append(segm_result)
         return bbox_result_list, segm_result_list
-
-    def segm2result(self, result):
-        if result is None:
-            bbox_result = [np.zeros((0, 5), dtype=np.float32) for i in
-                           range(self.num_classes)]
-            # BG is not included in num_classes
-            segm_result = [[] for _ in range(self.num_classes)]
-        else:
-            bbox_result = [np.zeros((0, 5), dtype=np.float32) for i in
-                           range(self.num_classes)]
-            segm_result = [[] for _ in range(self.num_classes)]
-            seg_pred = result[0].detach().cpu().numpy()
-            cate_label = result[1].detach().cpu().numpy()
-            cate_score = result[2].detach().cpu().numpy()
-            num_ins = seg_pred.shape[0]
-            # extract bboxes from segmentation result
-            bboxes = np.zeros((num_ins, 5), dtype=np.float32)
-            bboxes[:, -1] = cate_score
-            bboxes[:, :-1] = self.extract_bboxes(seg_pred)
-
-            bbox_result = [bboxes[cate_label == i, :] for i in
-                           range(self.num_classes)]
-
-            for idx in range(num_ins):
-                segm_result[cate_label[idx]].append(seg_pred[idx])
-        return bbox_result, segm_result
-
-    def extract_bboxes(self, mask):
-        """Compute bounding boxes from masks.
-        mask: [num_instances, height, width]. Mask pixels are either 1 or 0.
-        Returns: bbox array [num_instances, (x1, y1, x2, y2)].
-        """
-        num_ins = mask.shape[0]
-        boxes = np.zeros([num_ins, 4], dtype=np.float32)
-        for i in range(num_ins):
-            m = mask[i, :, :]
-            # Bounding box.
-            horizontal_indicies = np.where(np.any(m, axis=0))[0]
-            vertical_indicies = np.where(np.any(m, axis=1))[0]
-            if horizontal_indicies.shape[0]:
-                x1, x2 = horizontal_indicies[[0, -1]]
-                y1, y2 = vertical_indicies[[0, -1]]
-                # x2 and y2 should not be part of the box. Increment by 1.
-                x2 += 1
-                y2 += 1
-            else:
-                # No mask for this instance. Might happen due to
-                # resizing or cropping. Set bbox to zeros
-                x1, x2, y1, y2 = 0, 0, 0, 0
-            boxes[i] = np.array([x1, y1, x2, y2])
-        return boxes
 
     def get_seg_single(self,
                        cate_preds,

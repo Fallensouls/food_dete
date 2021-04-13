@@ -27,7 +27,7 @@ data = dict(
 
 checkpoint_config = dict(interval=4)
 workflow = [('train', 1)]
-evaluation = dict(metric=['bbox'], proposal_nums=(1, 10, 100))
+evaluation = dict(metric=['bbox', 'segm'], proposal_nums=(1, 10, 100))
 # We can use the pre-trained Mask RCNN model to obtain higher performance
 load_from = 'checkpoints/SOLO_R50_3x.pth'
 work_dir = './work_dirs/solo_r50_fpn_2x_unimib'

@@ -24,6 +24,7 @@ class BaseDenseSegHead(nn.Module, metaclass=ABCMeta):
                       gt_labels=None,
                       gt_bboxes_ignore=None,
                       gt_masks=None,
+                      mask_feat_pred=None,
                       proposal_cfg=None,
                       **kwargs):
         """
@@ -44,6 +45,9 @@ class BaseDenseSegHead(nn.Module, metaclass=ABCMeta):
             losses: (dict[str, Tensor]): A dictionary of loss components.
         """
         outs = self(x)
+
+        if mask_feat_pred is not None:
+            outs = outs + (mask_feat_pred,)
         if gt_labels is None:
             loss_inputs = outs + (gt_bboxes, img_metas)
         else:

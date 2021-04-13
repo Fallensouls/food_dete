@@ -14,7 +14,7 @@ class MaskFeatHead(nn.Module):
                  out_channels,
                  start_level,
                  end_level,
-                 num_classes,
+                 mask_feat_channels,
                  conv_cfg=None,
                  norm_cfg=None):
         super(MaskFeatHead, self).__init__()
@@ -24,7 +24,7 @@ class MaskFeatHead(nn.Module):
         self.start_level = start_level
         self.end_level = end_level
         assert start_level >= 0 and end_level >= start_level
-        self.num_classes = num_classes
+        self.mask_feat_channels = mask_feat_channels
         self.conv_cfg = conv_cfg
         self.norm_cfg = norm_cfg
 
@@ -82,7 +82,7 @@ class MaskFeatHead(nn.Module):
         self.conv_pred = nn.Sequential(
             ConvModule(
                 self.out_channels,
-                self.num_classes,
+                self.mask_feat_channels,
                 1,
                 padding=0,
                 conv_cfg=self.conv_cfg,

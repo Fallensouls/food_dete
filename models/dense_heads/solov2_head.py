@@ -1,4 +1,3 @@
-import numpy as np
 import mmcv
 import torch
 import torch.nn as nn
@@ -7,8 +6,9 @@ from mmcv.cnn import normal_init, bias_init_with_prob, ConvModule
 from mmdet.core import multi_apply
 from mmdet.models.builder import HEADS, build_loss
 from mmdet.core.utils import mask2ndarray
+from .base_dense_seg_head import BaseDenseSegHead
 
-from ..utils import matrix_nms
+from ..utils import matrix_nms, segm2result
 
 INF = 1e8
 
@@ -46,7 +46,7 @@ def dice_loss(input, target):
 
 
 @HEADS.register_module()
-class SOLOv2Head(nn.Module):
+class SOLOv2Head(BaseDenseSegHead):
 
     def __init__(self,
                  num_classes,
@@ -72,7 +72,7 @@ class SOLOv2Head(nn.Module):
         super(SOLOv2Head, self).__init__()
         self.num_classes = num_classes
         self.seg_num_grids = num_grids
-        self.cate_out_channels = self.num_classes - 1
+        self.cate_out_channels = self.num_classes
         self.ins_out_channels = ins_out_channels
         self.in_channels = in_channels
         self.seg_feat_channels = seg_feat_channels
@@ -99,7 +99,6 @@ class SOLOv2Head(nn.Module):
         self._init_layers()
 
     def _init_layers(self):  # kernel_convs = ins_convs
-        # norm_cfg = dict(type='GN', num_groups=32, requires_grad=True)
         self.cate_convs = nn.ModuleList()
         self.kernel_convs = nn.ModuleList()
         for i in range(self.stacked_convs):
@@ -158,11 +157,11 @@ class SOLOv2Head(nn.Module):
         return cate_pred, kernel_pred
 
     def split_feats(self, feats):
-        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear'),
+        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear', recompute_scale_factor=True),
                 feats[1],
                 feats[2],
                 feats[3],
-                F.interpolate(feats[4], size=feats[3].shape[-2:], mode='bilinear'))
+                F.interpolate(feats[4], size=feats[3].shape[-2:], mode='bilinear', recompute_scale_factor=True))
 
     def forward_single(self, x, idx, eval=False, upsampled_size=None):
         ins_kernel_feat = x
@@ -182,7 +181,7 @@ class SOLOv2Head(nn.Module):
         kernel_feat = ins_kernel_feat
         seg_num_grid = self.seg_num_grids[idx]
         kernel_feat = F.interpolate(
-            kernel_feat, size=seg_num_grid, mode='bilinear')
+            kernel_feat, size=seg_num_grid, mode='bilinear', recompute_scale_factor=True)
 
         cate_feat = kernel_feat[:, :-2, :, :]
 
@@ -310,7 +309,7 @@ class SOLOv2Head(nn.Module):
                 in zip(self.scale_ranges, self.strides, self.seg_num_grids):
 
             hit_indices = ((gt_areas >= lower_bound) & (
-                gt_areas <= upper_bound)).nonzero().flatten()
+                gt_areas <= upper_bound)).nonzero(as_tuple=False).flatten()
             num_ins = len(hit_indices)
 
             ins_label = []
@@ -416,33 +415,10 @@ class SOLOv2Head(nn.Module):
 
             result = self.get_seg_single(cate_pred_list, seg_pred_list, kernel_pred_list,
                                          featmap_size, img_shape, ori_shape, scale_factor, cfg, rescale)
-            bbox_result, segm_result = self.segm2result(result)
+            bbox_result, segm_result = segm2result(result, self.num_classes)
             bbox_result_list.append(bbox_result)
             segm_result_list.append(segm_result)
         return bbox_result_list, segm_result_list
-
-    def segm2result(self, result):
-        if result is None:
-            bbox_result = [np.zeros((0, 5), dtype=np.float32) for i in
-                           range(self.num_classes)]
-            # BG is not included in num_classes
-            segm_result = [[] for _ in range(self.num_classes)]
-        else:
-            bbox_result = [np.zeros((0, 5), dtype=np.float32) for i in
-                           range(self.num_classes)]
-            segm_result = [[] for _ in range(self.num_classes)]
-            seg_pred = result[0].cpu().numpy()
-            cate_label = result[1].cpu().numpy()
-            cate_score = result[2].cpu().numpy()
-            num_ins = seg_pred.shape[0]
-            # fake bboxes
-            bboxes = np.zeros((num_ins, 5), dtype=np.float32)
-            bboxes[:, -1] = cate_score
-            bbox_result = [bboxes[cate_label == i, :] for i in
-                           range(self.num_classes)]
-            for idx in range(num_ins):
-                segm_result[cate_label[idx]].append(seg_pred[idx])
-        return bbox_result, segm_result
 
     def get_seg_single(self,
                        cate_preds,
@@ -468,7 +444,7 @@ class SOLOv2Head(nn.Module):
             return None
 
         # cate_labels & kernel_preds
-        inds = inds.nonzero()
+        inds = inds.nonzero(as_tuple=False)
         cate_labels = inds[:, 1]
         kernel_preds = kernel_preds[inds[:, 0]]
 
@@ -539,9 +515,9 @@ class SOLOv2Head(nn.Module):
 
         seg_preds = F.interpolate(seg_preds.unsqueeze(0),
                                   size=upsampled_size_out,
-                                  mode='bilinear')[:, :, :h, :w]
+                                  mode='bilinear', recompute_scale_factor=True)[:, :, :h, :w]
         seg_masks = F.interpolate(seg_preds,
                                   size=ori_shape[:2],
-                                  mode='bilinear').squeeze(0)
+                                  mode='bilinear', recompute_scale_factor=True).squeeze(0)
         seg_masks = seg_masks > cfg.mask_thr
         return seg_masks, cate_labels, cate_scores
